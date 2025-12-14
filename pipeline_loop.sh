@@ -3,7 +3,7 @@
 #SBATCH --output=pipeline_%j.log
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=8G
 #SBATCH --partition=msc_appbio
 
 # 1. Setup Environment
