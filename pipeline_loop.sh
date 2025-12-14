@@ -7,7 +7,6 @@
 #SBATCH --partition=msc_appbio
 
 # 1. Setup Environment
-# (Adjust this line if you usually load a module for conda, e.g., module load anaconda3)
 source ~/.bashrc
 conda activate /users/k25049595/.conda/envs/tophat_env
 
@@ -18,20 +17,17 @@ INPUT_DIR="fastq_gz"
 OUT_TOPHAT="output_directory"
 OUT_CUFF="cufflinks_output"
 
-# Create output directories if they don't exist
+# Create output directories
 mkdir -p $OUT_TOPHAT
 mkdir -p $OUT_CUFF
 
-# 3. The Main Loop
+# 3. Main Loop
 for file in $INPUT_DIR/*.fastq.gz; do
 
-    # Extract the sample name (e.g., gets "ERR3148791" from "fastq_gz/ERR3148791.fastq.gz")
+    # Extract sample name
     sample_name=$(basename "$file" .fastq.gz)
 
-    echo "=================================================="
     echo "Processing Sample: $sample_name"
-    echo "Time: $(date)"
-    echo "=================================================="
 
     # Run TopHat
     echo "Running TopHat..."
