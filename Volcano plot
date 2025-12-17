@@ -1,0 +1,90 @@
+# Read the differential expression results from Cuffdiff
+gene_diff <- read.table("~/Desktop/ABCC/Group project/cuffdiff_results_UQ/gene_exp.diff", 
+                        header = TRUE, sep = "\t")
+
+# Filter for the comparison you want: Lag vs Diauxic (6h vs 26h)
+# Check what comparisons are available
+cat("Available comparisons:\n")
+print(unique(paste(gene_diff$sample_1, "vs", gene_diff$sample_2)))
+
+# Filter for Lag (6h) vs Diauxic (26h) comparison
+gene_diff_filtered <- gene_diff %>%
+  filter((sample_1 == "Lag" & sample_2 == "Diauxic") | 
+           (sample_1 == "Diauxic" & sample_2 == "Lag"))
+
+# If the comparison is reversed (Diauxic vs Lag), flip the fold changes
+if(gene_diff_filtered$sample_1[1] == "Diauxic") {
+  gene_diff_filtered$log2.fold_change. <- -gene_diff_filtered$log2.fold_change.
+  gene_diff_filtered$sample_1 <- "Lag"
+  gene_diff_filtered$sample_2 <- "Diauxic"
+}
+
+cat("\nFiltered to:", unique(paste(gene_diff_filtered$sample_1, "vs", gene_diff_filtered$sample_2)), "\n")
+
+# Filter for significant genes (q-value < 0.05)
+sig_genes <- gene_diff_filtered %>%
+  filter(significant == "yes", status == "OK")
+
+cat("Number of significant genes:", nrow(sig_genes), "\n")
+
+# View top up and down-regulated genes
+top_up <- sig_genes %>%
+  arrange(desc(log2.fold_change.)) %>%
+  head(20)
+
+top_down <- sig_genes %>%
+  arrange(log2.fold_change.) %>%
+  head(20)
+
+print("Top 20 Up-regulated genes:")
+print(top_up[, c("gene_id", "sample_1", "sample_2", "log2.fold_change.", "q_value")])
+
+print("\nTop 20 Down-regulated genes:")
+print(top_down[, c("gene_id", "sample_1", "sample_2", "log2.fold_change.", "q_value")])
+
+# Create volcano plot 
+gene_diff_plot <- gene_diff_filtered %>%
+  filter(status == "OK") %>%
+  mutate(
+    regulation = case_when(
+      significant == "yes" & log2.fold_change. > 1 ~ "Upregulated",
+      significant == "yes" & log2.fold_change. < -1 ~ "Downregulated",
+      significant == "yes" ~ "Significant (|log2FC| < 1)",
+      TRUE ~ "Not Significant"
+    ),
+    regulation = factor(regulation, 
+                        levels = c("Upregulated", "Downregulated", 
+                                   "Significant (|log2FC| < 1)", "Not Significant"))
+  )
+
+# Count genes in each category
+cat("\nVolcano plot summary:\n")
+print(table(gene_diff_plot$regulation))
+
+ggplot(gene_diff_plot, aes(x = log2.fold_change., y = -log10(q_value), color = regulation)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(
+    values = c("Upregulated" = "#d62728",      # Red
+               "Downregulated" = "#1f77b4",    # Blue
+               "Significant (|log2FC| < 1)" = "#ff7f0e",  # Orange
+               "Not Significant" = "grey70"),
+    name = "Classification"
+  ) +
+  scale_x_continuous(expand = expansion(mult = 0.1)) +  # Add 10% padding on x-axis
+  scale_y_continuous(expand = expansion(mult = 0.1)) +  # Add 10% padding on y-axis
+  theme_bw(base_size = 12) +
+  labs(
+    title = "Diauxic Shift (26h) vs Lag Phase (6h)",         
+    subtitle = "Thresholds: q-value < 0.05, |log2FC| > 1",
+    x = "Log2 Fold Change",
+    y = "-Log10(q-value)"
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black", alpha = 0.5) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black", alpha = 0.5) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10, color = "grey40")
+  )
+
+ggsave("Volcano_Plot_Diauxic_vs_Lag.pdf", width = 9, height = 6)
