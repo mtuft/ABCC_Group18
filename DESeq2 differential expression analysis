@@ -1,0 +1,121 @@
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+
+# The genes.read_group_tracking file contains counts for each replicate
+read_group_tracking <- read.table("~/Desktop/ABCC/Group project/cuffdiff_results_UQ/genes.read_group_tracking", 
+                                 header = TRUE, sep = "\t")
+
+# Reshape to count matrix (each replicate as a column)
+counts_matrix <- read_group_tracking %>%
+  select(tracking_id, condition, replicate, raw_frags) %>%
+  mutate(sample_name = paste(condition, replicate, sep = "_")) %>%
+  select(tracking_id, sample_name, raw_frags) %>%
+  pivot_wider(names_from = sample_name, values_from = raw_frags, values_fn = mean) %>%
+  column_to_rownames("tracking_id") %>%
+  as.matrix() %>%
+  round()
+
+cat("Count matrix dimensions:", dim(counts_matrix), "\n")
+
+# Create metadata
+sample_info <- data.frame(
+  row.names = colnames(counts_matrix),
+  Condition = factor(gsub("_[0-9]+$", "", colnames(counts_matrix)))
+)
+
+# Ensure factor levels are in biological order
+sample_info$Condition <- factor(sample_info$Condition, 
+                               levels = c("Lag", "Exponential", "Diauxic"))
+
+cat("Sample distribution:\n")
+print(table(sample_info$Condition))
+
+# Create DESeq2 object
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_matrix,
+  colData = sample_info,
+  design = ~ Condition
+)
+
+# Filter low count genes
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+cat("\nKept", sum(keep), "genes out of", length(keep), "\n")
+
+# Run DESeq2
+dds <- DESeq(dds)
+
+# Comparison 1: Exponential (14h) vs Lag (6h)
+res_exp_vs_lag <- results(dds, contrast = c("Condition", "Exponential", "Lag"))
+res_exp_vs_lag <- res_exp_vs_lag[order(res_exp_vs_lag$padj), ]
+
+cat("\n=== Exponential (14h) vs Lag (6h) ===\n")
+summary(res_exp_vs_lag)
+
+# Count significant genes
+sig_exp_lag <- sum(res_exp_vs_lag$padj < 0.05 & abs(res_exp_vs_lag$log2FoldChange) > 1, na.rm = TRUE)
+cat("Significant genes (padj < 0.05, |log2FC| > 1):", sig_exp_lag, "\n")
+
+# Comparison 2: Diauxic (26h) vs Exponential (14h)
+res_dia_vs_exp <- results(dds, contrast = c("Condition", "Diauxic", "Exponential"))
+res_dia_vs_exp <- res_dia_vs_exp[order(res_dia_vs_exp$padj), ]
+
+cat("\n=== Diauxic (26h) vs Exponential (14h) ===\n")
+summary(res_dia_vs_exp)
+
+sig_dia_exp <- sum(res_dia_vs_exp$padj < 0.05 & abs(res_dia_vs_exp$log2FoldChange) > 1, na.rm = TRUE)
+cat("Significant genes (padj < 0.05, |log2FC| > 1):", sig_dia_exp, "\n")
+
+# Comparison 3: Diauxic (26h) vs Lag (6h)
+res_dia_vs_lag <- results(dds, contrast = c("Condition", "Diauxic", "Lag"))
+res_dia_vs_lag <- res_dia_vs_lag[order(res_dia_vs_lag$padj), ]
+
+cat("\n=== Diauxic (26h) vs Lag (6h) ===\n")
+summary(res_dia_vs_lag)
+
+sig_dia_lag <- sum(res_dia_vs_lag$padj < 0.05 & abs(res_dia_vs_lag$log2FoldChange) > 1, na.rm = TRUE)
+cat("Significant genes (padj < 0.05, |log2FC| > 1):", sig_dia_lag, "\n")
+
+write.csv(as.data.frame(res_exp_vs_lag), "DESeq2_Exponential_vs_Lag.csv")
+write.csv(as.data.frame(res_dia_vs_exp), "DESeq2_Diauxic_vs_Exponential.csv")
+write.csv(as.data.frame(res_dia_vs_lag), "DESeq2_Diauxic_vs_Lag.csv")
+
+cat("\n=== Results saved to CSV files ===\n")
+cat("- DESeq2_Exponential_vs_Lag.csv\n")
+cat("- DESeq2_Diauxic_vs_Exponential.csv\n")
+cat("- DESeq2_Diauxic_vs_Lag.csv\n")
+
+# Extract significant genes for each comparison
+sig_genes_exp_lag <- rownames(res_exp_vs_lag[which(res_exp_vs_lag$padj < 0.05 & 
+                                                    abs(res_exp_vs_lag$log2FoldChange) > 1), ])
+
+sig_genes_dia_exp <- rownames(res_dia_vs_exp[which(res_dia_vs_exp$padj < 0.05 & 
+                                                    abs(res_dia_vs_exp$log2FoldChange) > 1), ])
+
+sig_genes_dia_lag <- rownames(res_dia_vs_lag[which(res_dia_vs_lag$padj < 0.05 & 
+                                                    abs(res_dia_vs_lag$log2FoldChange) > 1), ])
+
+# Save gene lists
+write.table(sig_genes_exp_lag, "sig_genes_Exp_vs_Lag.txt", 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(sig_genes_dia_exp, "sig_genes_Dia_vs_Exp.txt", 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(sig_genes_dia_lag, "sig_genes_Dia_vs_Lag.txt", 
+            quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+cat("\n=== Gene lists saved ===\n")
+cat("- sig_genes_Exp_vs_Lag.txt\n")
+cat("- sig_genes_Dia_vs_Exp.txt\n")
+cat("- sig_genes_Dia_vs_Lag.txt\n")
+
+# Print top 10 most significant genes from each comparison
+cat("\n=== Top 10 most significant genes: Exponential vs Lag ===\n")
+print(head(as.data.frame(res_exp_vs_lag)[, c("log2FoldChange", "padj")], 10))
+
+cat("\n=== Top 10 most significant genes: Diauxic vs Exponential ===\n")
+print(head(as.data.frame(res_dia_vs_exp)[, c("log2FoldChange", "padj")], 10))
+
+cat("\n=== Top 10 most significant genes: Diauxic vs Lag ===\n")
+print(head(as.data.frame(res_dia_vs_lag)[, c("log2FoldChange", "padj")], 10))
