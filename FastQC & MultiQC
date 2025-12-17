@@ -1,0 +1,315 @@
+Quality Control Workflow (FastQC & MultiQC)
+
+# 1. Created a conda environment for MultiQC
+conda create -n multiqc_env -c bioconda multiqc
+
+# 2. Activated the environment
+conda activate multiqc_env
+
+# 3. Ran MultiQC to aggregate all zip files in the current directory
+# This generates the summary report 'multiqc_report.html'
+multiqc . -o multiqc_report/ --include "*.zip"
+
+Python Environment Setup
+# Loaded Anaconda module (HPC specific)
+module load anaconda3/2022.10-gcc-13.2.0
+
+# Created environment 'pythonday' and installed core packages
+# Packages: Scanpy (single cell), AnnData, Scikit-image, iGraph, Celltypist, JupyterLab
+conda install --channel conda-forge --channel bioconda scanpy annadata scikit-image igraph celltypist jupyterlab
+
+HPC Job Submission (Jupyter)
+# You created a submission script
+nano jupyter.sh
+
+# You submitted the job to the scheduler
+sbatch jupyter.sh
+
+# You checked the status of the job
+squeue --me
+
+# You checked the logs to get the connection URL/Token
+cat slurm-29884314.out
+
+5. Data Transfer (SCP)
+# Copied HTML reports from HPC to local Desktop
+scp k25049595@erc-hpc-login1:/scratch/grp/msc_appbio/Group18_ABCC/fastqc_html/html_files/*.html /Users/michaeltuft/Desktop/ABCC/html_files/
+
+# Quality Control
+# FastQC was run on raw FASTQ files to generate quality reports.
+module load fastqc  # or the specific environment you used
+fastqc *.fastq.gz -o fastqc_html/
+
+## Read Alignment
+Sequence alignment was performed using **TopHat2** (v2.x).
+
+* **Sample:** ERR3148791
+* **Reference Genome:** S. cerevisiae (R64-1-1)
+* **Output Files:**
+    * `accepted_hits.bam`: Binary Alignment Map of successfully aligned reads.
+    * `junctions.bed`: Detected splice junctions.
+* **Date of Analysis:** Nov 24, 2025
+
+cat ERR3148791/align_summary.txt
+Reads:
+          Input     :   3291157
+           Mapped   :   3172415 (96.4% of input)
+            of these:    185201 ( 5.8%) have multiple alignments (32960 have >20)
+96.4% overall read mapping rate.
+
+tophat -p 8 \
+  -G Saccharomyces_cerevisiae.R64-1-1.107.gtf \
+  -o output_directory/ERR3148791 \
+  yeast_bowtie_index \
+  fastq_gz/ERR3148791.fastq.gz
+
+  # Activate the environment
+conda activate /users/k25049595/.conda/envs/tophat_env
+
+# Run Cufflinks
+# -p 8: Use 8 threads (faster)
+# -G: Use the GTF file (guides assembly based on known genes)
+# -o: Output directory
+cufflinks -p 8 \
+  -G Saccharomyces_cerevisiae.R64-1-1.107.gtf \
+  -o cufflinks_output/ERR3148791 \
+  output_directory/ERR3148791/accepted_hits.bam
+
+  #You need to install Cufflinks directly into your active Conda environment.
+  conda install -c bioconda cufflinks
+# It should say cufflinks v2.2.1, which matches the suite used in the paper
+
+(tophat_env) k25049595@erc-hpc-login2:/scratch/grp/msc_appbio/Group18_ABCC$ cufflinks -p 8 \
+  -G Saccharomyces_cerevisiae.R64-1-1.107.gtf \
+  -o cufflinks_output/ERR3148791 \
+  output_directory/ERR3148791/accepted_hits.bam
+
+  Processed 6361 loci: This is the most important number. Saccharomyces cerevisiae has approximately 6,000–6,600 genes. The fact that Cufflinks processed 6,361 loci confirms that your GTF annotation file matched your Genome Index perfectly.
+
+  Fragment Length Distribution: ... (default): This indicates Cufflinks used a default model (Mean 200bp) to estimate how long the RNA fragments were. This is standard behavior for single-end sequencing data (since the software can't measure the distance between read pairs).
+
+genes.fpkm_tracking - primary results file
+
+#!/bin/bash
+#SBATCH --job-name=yeast_rna_pipeline
+#SBATCH --output=pipeline_%j.log
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --partition=msc_appbio
+
+# 1. Setup Environment
+# (Adjust this line if you usually load a module for conda, e.g., module load anaconda3)
+source ~/.bashrc
+conda activate /users/k25049595/.conda/envs/tophat_env
+
+# 2. Define Variables
+GTF="Saccharomyces_cerevisiae.R64-1-1.107.gtf"
+INDEX="yeast_bowtie_index"
+INPUT_DIR="fastq_gz"
+OUT_TOPHAT="output_directory"
+OUT_CUFF="cufflinks_output"
+
+# Create output directories if they don't exist
+mkdir -p $OUT_TOPHAT
+mkdir -p $OUT_CUFF
+
+# 3. The Main Loop
+for file in $INPUT_DIR/*.fastq.gz; do
+
+    # Extract the sample name (e.g., gets "ERR3148791" from "fastq_gz/ERR3148791.fastq.gz")
+    sample_name=$(basename "$file" .fastq.gz)
+
+    echo "=================================================="
+    echo "Processing Sample: $sample_name"
+    echo "Time: $(date)"
+    echo "=================================================="
+
+    # Run TopHat
+    echo "Running TopHat..."
+    tophat -p 4 \
+        -G $GTF \
+        -o $OUT_TOPHAT/$sample_name \
+        $INDEX \
+        $file
+
+    # Run Cufflinks
+    echo "Running Cufflinks..."
+    cufflinks -p 4 \
+        -G $GTF \
+        -o $OUT_CUFF/$sample_name \
+        $OUT_TOPHAT/$sample_name/accepted_hits.bam
+
+    echo "Finished $sample_name"
+
+done
+
+#submit the job
+sbatch pipeline_loop.sh
+
+### Step 3: Monitor Progress
+1.  **Check if it's running:**
+    ```bash
+    squeue --me
+    2.  **Watch it live:**
+    A log file named `pipeline_XXXXX.log` will appear. You can watch the progress in real-time:
+    ```bash
+    tail -f pipeline_*.log
+        *(Press `Ctrl+C` to stop watching).*
+
+### What this script does
+1.  **`for file in $INPUT_DIR/*.fastq.gz`**: This tells the computer to look at every file ending in `.fastq.gz`.
+2.  **`basename`**: This automatically figures out the name "ERR3148791" so we can name the output folders correctly.
+3.  **Automation**: It runs TopHat, waits for it to finish, runs Cufflinks, and then moves immediately to the next file in the list.
+
+Given *S. cerevisiae* is small, this entire batch of 54 files should complete within a few hours.
+
+(base) k25049595@erc-hpc-login2:/scratch/grp/msc_appbio/Group18_ABCC$ tail -n 5 pipeline_*.log
+>	              Default Mean: 200
+>	           Default Std Dev: 80
+[20:45:19] Estimating transcript abundances.
+> Processed 6361 loci.                         [*************************] 100%
+Finished ERR3148844
+(base) k25049595@erc-hpc-login2:/scratch/grp/msc_appbio/Group18_ABCC$ ls -1 cufflinks_output/ | wc -l
+54
+
+# 1. Generate the list of files for 6 Hours (Lag Phase)
+LIST_6H=$(awk -F'\t' '$30 == "6" {printf "cufflinks_output/" $28 "/transcripts.gtf,"}' E-MTAB-7657.sdrf.txt | sed 's/,$//')
+
+# 2. Generate the list of files for 14 Hours (Exponential Phase)
+LIST_14H=$(awk -F'\t' '$30 == "14" {printf "cufflinks_output/" $28 "/transcripts.gtf,"}' E-MTAB-7657.sdrf.txt | sed 's/,$//')
+
+# 3. Generate the list of files for 26 Hours (Diauxic Shift)
+LIST_26H=$(awk -F'\t' '$30 == "26" {printf "cufflinks_output/" $28 "/transcripts.gtf,"}' E-MTAB-7657.sdrf.txt | sed 's/,$//')
+
+# 4. Print the final command to the screen
+echo "cuffdiff -p 8 -L Lag,Exponential,Diauxic -o cuffdiff_results Saccharomyces_cerevisiae.R64-1-1.107.gtf $LIST_6H $LIST_14H $LIST_26H"
+
+CuffDiff script:
+#!/bin/bash
+#SBATCH --job-name=yeast_cuffdiff
+#SBATCH --output=cuffdiff_%j.log
+#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --partition=msc_appbio
+
+# 1. Setup Environment
+source ~/.bashrc
+conda activate /users/k25049595/.conda/envs/tophat_env
+
+# 2. Define Files
+GTF="Saccharomyces_cerevisiae.R64-1-1.107.gtf"
+SDRF="E-MTAB-7657.sdrf.txt"
+
+echo "Generating file lists from $SDRF..."
+
+# 3. Auto-generate the lists of files for each time point
+# Group 1: 6 Hours (Lag)
+LIST_6H=$(awk -F'\t' '$30 == "6" {printf "cufflinks_output/" $28 "/transcripts.gtf,"}' $SDRF | sed 's/,$//')
+
+# Group 2: 14 Hours (Exponential)
+LIST_14H=$(awk -F'\t' '$30 == "14" {printf "cufflinks_output/" $28 "/transcripts.gtf,"}' $SDRF | sed 's/,$//')
+
+# Group 3: 26 Hours (Diauxic)
+LIST_26H=$(awk -F'\t' '$30 == "26" {printf "cufflinks_output/" $28 "/transcripts.gtf,"}' $SDRF | sed 's/,$//')
+
+# 4. Run Cuffdiff
+echo "Starting Cuffdiff..."
+/users/k25049595/.conda/envs/tophat_env/bin/cuffdiff -p 4 \
+  -N \
+  -L Lag,Exponential,Diauxic \
+  -o cuffdiff_results_UQ \
+  $GTF \
+  $LIST_6H $LIST_14H $LIST_26H
+
+#!/bin/bash
+#SBATCH --job-name=yeast_cuffdiff_UQ
+#SBATCH --output=cuffdiff_UQ_%j.log
+#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --partition=msc_appbio
+
+# 1. Setup Environment (CRITICAL STEP)
+source ~/.bashrc
+conda activate /users/k25049595/.conda/envs/tophat_env
+
+# 2. Define Files
+GTF="Saccharomyces_cerevisiae.R64-1-1.107.gtf"
+SDRF="E-MTAB-7657.sdrf.txt"
+
+# 3. Auto-generate the lists of BAM files for each time point
+# Group 1: 6 Hours (Lag)
+LIST_6H=$(awk -F'\t' '$30 == "6" {printf "output_directory/" $28 "/accepted_hits.bam,"}' $SDRF | sed 's/,$//')
+
+# Group 2: 14 Hours (Exponential)
+LIST_14H=$(awk -F'\t' '$30 == "14" {printf "output_directory/" $28 "/accepted_hits.bam,"}' $SDRF | sed 's/,$//')
+
+# Group 3: 26 Hours (Diauxic)
+LIST_26H=$(awk -F'\t' '$30 == "26" {printf "output_directory/" $28 "/accepted_hits.bam,"}' $SDRF | sed 's/,$//')
+
+# 4. Run Cuffdiff (With Upper Quartile Normalization)
+echo "Run Cuffdiff"
+
+cuffdiff -p 4 \
+  -N \
+  -L Lag,Exponential,Diauxic \
+  -o cuffdiff_results_UQ \
+  $GTF \
+  $LIST_6H $LIST_14H $LIST_26H
+
+
+# ==============================================================================
+# APPENDIX: CORE ANALYSIS SCRIPTS
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. ALIGNMENT & QUANTIFICATION PIPELINE (TopHat2 + Cufflinks)
+# ------------------------------------------------------------------------------
+# This loop processes all raw .fastq.gz files, aligns them to the yeast genome,
+# and quantifies transcript abundance.
+
+# Define Reference Files
+GTF="Saccharomyces_cerevisiae.R64-1-1.107.gtf"
+INDEX="yeast_bowtie_index"
+
+# Loop through all sample files
+for file in fastq_gz/*.fastq.gz; do
+    
+    # Get sample name (e.g., ERR3148791)
+    sample_name=$(basename "$file" .fastq.gz)
+
+    # Step A: Alignment using TopHat2
+    # -p 4: Use 4 threads
+    # -G: Use GTF annotation to guide alignment
+    tophat -p 4 \
+        -G $GTF \
+        -o output_directory/$sample_name \
+        $INDEX \
+        $file
+
+    # Step B: Quantification using Cufflinks
+    # -G: Quantify only known genes (Guided Assembly)
+    cufflinks -p 4 \
+        -G $GTF \
+        -o cufflinks_output/$sample_name \
+        output_directory/$sample_name/accepted_hits.bam
+
+done
+
+# Define file lists (Grouped by biological condition)
+# (Note: These lists are generated based on the SDRF metadata file)
+LIST_6H="cufflinks_output/ERR.../transcripts.gtf, ..."   # Lag Phase
+LIST_14H="cufflinks_output/ERR.../transcripts.gtf, ..."  # Exponential Phase
+LIST_26H="cufflinks_output/ERR.../transcripts.gtf, ..."  # Diauxic Shift
+
+# Run Cuffdiff
+# -N: Upper Quartile Normalization (CRITICAL PARAMETER)
+# -L: Labels for the graph/output
+cuffdiff -p 4 \
+  -N \
+  -L Lag,Exponential,Diauxic \
+  -o cuffdiff_results_UQ \
+  $GTF \
+  $LIST_6H $LIST_14H $LIST_26H
