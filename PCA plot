@@ -1,0 +1,89 @@
+library(DESeq2)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(tibble)
+library(tidyr)
+
+# The genes.read_group_tracking file contains counts for each replicate
+read_group_tracking <- read.table("~/Desktop/ABCC/Group project/cuffdiff_results_UQ/genes.read_group_tracking", 
+                                 header = TRUE, sep = "\t")
+
+# Check structure
+cat("\nColumns in read_group_tracking:\n")
+print(colnames(read_group_tracking))
+cat("\nFirst few rows:\n")
+print(head(read_group_tracking))
+cat("\nNumber of rows:", nrow(read_group_tracking), "\n")
+cat("\nUnique conditions:", unique(read_group_tracking$condition), "\n")
+
+# Check if raw_frags column exists
+if("raw_frags" %in% colnames(read_group_tracking)) {
+  cat("raw_frags column exists\n")
+} else {
+  cat("Available count columns:\n")
+  print(grep("count|frag|FPKM", colnames(read_group_tracking), value = TRUE))
+}
+
+# Reshape to count matrix
+counts_matrix <- read_group_tracking %>%
+  select(tracking_id, condition, replicate, raw_frags) %>%
+  mutate(sample_name = paste(condition, replicate, sep = "_")) %>%
+  select(tracking_id, sample_name, raw_frags) %>%
+  pivot_wider(names_from = sample_name, values_from = raw_frags, values_fn = mean) %>%
+  column_to_rownames("tracking_id") %>%
+  as.matrix() %>%
+  round()
+
+cat("\nCount matrix dimensions:", dim(counts_matrix), "\n")
+cat("Sample names:", colnames(counts_matrix)[1:10], "...\n")
+
+# Create metadata
+sample_info <- data.frame(
+  row.names = colnames(counts_matrix),
+  Condition = factor(gsub("_[0-9]+$", "", colnames(counts_matrix)))
+)
+
+# Ensure factor levels are in biological order
+sample_info$Condition <- factor(sample_info$Condition, 
+                               levels = c("Lag", "Exponential", "Diauxic"))
+
+cat("\nSample distribution:\n")
+print(table(sample_info$Condition))
+
+# Create DESeq2 object
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_matrix,
+  colData = sample_info,
+  design = ~ Condition
+)
+
+# Filter low count genes
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+cat("\nKept", sum(keep), "genes out of", length(keep), "\n")
+
+# Run DESeq2
+dds <- DESeq(dds)
+
+# Variance stabilizing transformation
+vsd <- vst(dds, blind = FALSE)
+
+pcaData <- plotPCA(vsd, intgroup = "Condition", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+p <- ggplot(pcaData, aes(PC1, PC2, color = Condition)) +
+  geom_point(size = 3, alpha = 0.7) +
+  stat_ellipse(level = 0.95, linetype = 2) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  ggtitle("PCA of Gene Expression Across Growth Phases") +
+  theme_bw(base_size = 12) +
+  scale_color_manual(values = c("Lag" = "#1f77b4", 
+                                "Exponential" = "#ff7f0e", 
+                                "Diauxic" = "#2ca02c"))
+
+print(p)
+ggsave("PCA_Plot_With_Replicates.pdf", plot = p, width = 8, height = 6)
+
+cat("\nPCA plot saved as 'PCA_Plot_With_Replicates.pdf'\n")
